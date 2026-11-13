@@ -11,7 +11,10 @@
   function hourSlots(a, b) { var o = []; for (var h = a; h < b; h++) o.push({ id: "H" + h, label: "1 hour", t: p(h) + "–" + p(h + 1) }); return o; }
   function spanSlots(list, len, label) { return list.map(function (h) { return { id: "S" + h, label: label, t: p(h) + "–" + p(h + len) }; }); }
 
-  var FACILITIES = [
+  /* Fallback shapes, used only in demo mode. In normal use the Spaces tab of the
+     sheet is the source of truth, so the committee can change rates and hours
+     without anybody touching the code. */
+  var BUILTIN = [
     { id: "banquet", name: "Banquet Hall", cap: "200 guests", rate: 15000, unit: "per half-day",
       slots: [{ id: "H1", label: "1st half", t: "09:00–15:00" }, { id: "H2", label: "2nd half", t: "16:00–23:00" }] },
     { id: "terrace", name: "Terrace", cap: "80 guests", rate: 9000, unit: "per half-day",
@@ -23,7 +26,13 @@
     { id: "theatre", name: "Home Theatre", cap: "10 seats", rate: 2500, unit: "per 5-hour slot", slots: spanSlots([10, 16], 5, "5 hours") },
     { id: "golf", name: "Golf Room", cap: "4 players", rate: 1500, unit: "per 2-hour slot", slots: spanSlots([8, 10, 12, 14, 16, 18, 20], 2, "2 hours") }
   ];
-  var FMAP = {}; FACILITIES.forEach(function (f) { FMAP[f.id] = f; });
+  var FACILITIES = BUILTIN, FMAP = {};
+  function useSpaces(list) {
+    FACILITIES = (list && list.length) ? list : BUILTIN;
+    FMAP = {};
+    FACILITIES.forEach(function (f) { FMAP[f.id] = f; });
+  }
+  useSpaces(null);
 
   var LIVE = { requested: 1, approved: 1, paid_pending: 1, confirmed: 1 };
   var LABEL = {
@@ -115,23 +124,24 @@
   function refresh() {
     return Data.list().then(function (list) {
       S.bookings = list;
+      useSpaces(Data.spaces);
       return sweepExpired();
     }).then(render).catch(function (e) {
       viewEl.innerHTML = '<div class="empty"><strong>Could not load bookings</strong>' + esc(e.message) + '</div>';
     });
   }
-  /* The 48-hour rule. A cron job on the server should do this too, so it applies
-     even when nobody has the app open; this keeps the screen honest meanwhile. */
+  /* The sheet applies the 48-hour rule on every read and on an hourly trigger,
+     so this only has to cover demo mode, which has no server. */
   function sweepExpired() {
-    var now = Date.now(), jobs = [];
+    if (Data.mode !== "demo") return Promise.resolve();
+    var now = Date.now();
     S.bookings.forEach(function (b) {
       if (b.status === "approved" && deadline(b) && now > deadline(b)) {
         b.status = "cancelled_nopay";
         b.note = "No payment picture within " + WINDOW_H + " hours of approval.";
-        jobs.push(Data.update(b.id, { status: b.status, note: b.note }));
       }
     });
-    return Promise.all(jobs);
+    return Promise.resolve();
   }
 
   /* ───────────── tabs ───────────── */
@@ -338,6 +348,7 @@
     hydrateProofs();
   }
   function rowHTML(b) {
+    if (!b.id) return "";
     var f = FMAP[b.facility] || { name: b.facility, slots: [] }, now = Date.now();
     var h = '<div class="row" data-s="' + b.status + '" data-id="' + esc(b.id) + '"><div class="rmain">' +
       '<div class="rid">' + esc(b.id) + "</div>" +
@@ -400,23 +411,16 @@
         return;
       }
       el.onclick = function () {
-        var patch = null, msg = "";
-        if (act === "approve") {
-          patch = { status: "approved", approved_at: Date.now(), approved_by: S.me.login, note: "" };
-          msg = b.id + " approved — payment due by " + stamp(Date.now() + WINDOW_H * HOUR);
-        } else if (act === "reject") {
-          patch = { status: "rejected", note: "Not approved by the committee." }; msg = b.id + " rejected.";
-        } else if (act === "verify") {
-          patch = { status: "confirmed", verified_at: Date.now(), verified_by: S.me.login, note: "" }; msg = b.id + " confirmed.";
-        } else if (act === "reject-pay") {
-          patch = { status: "approved", proof: null, note: "Proof returned — upload a clearer receipt before the clock runs out." };
-          msg = "Proof returned to the resident.";
-        } else if (act === "cancel") {
-          patch = { status: "cancelled", note: "Cancelled by the resident." }; msg = b.id + " cancelled.";
-        }
-        if (!patch) return;
+        var msg = {
+          approve: b.id + " approved — payment due within " + WINDOW_H + " hours",
+          reject: b.id + " rejected.",
+          verify: b.id + " confirmed.",
+          "reject-pay": "Proof returned to the resident.",
+          cancel: b.id + " cancelled."
+        }[act];
+        if (!msg) return;
         el.disabled = true;
-        Data.update(b.id, patch).then(function () { toast(msg); return refresh(); })
+        Data.act(b.id, act).then(function () { toast(msg); return refresh(); })
           .catch(function (e) { toast(e.message); el.disabled = false; });
       };
     });
@@ -425,7 +429,7 @@
     Array.prototype.forEach.call(viewEl.querySelectorAll("[data-proof]"), function (box) {
       var b = S.bookings.filter(function (x) { return x.id === box.dataset.proof; })[0];
       if (!b || !b.proof) return;
-      Data.proofUrl(b.proof).then(function (url) {
+      Data.proofUrl(b).then(function (url) {
         if (!url || box.querySelector("img")) return;
         var img = new Image();
         img.src = url; img.alt = "Payment proof for " + b.id;

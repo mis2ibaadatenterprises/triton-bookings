@@ -1,18 +1,15 @@
 /* Triton — deployment configuration.
-   Leave SUPABASE_URL empty to run in on-device demo mode (data stays in this browser).
-   Fill both values after creating a Supabase project to switch the whole app to the
-   shared database: every phone then sees the same bookings. The anon key is a public
-   key by design — row-level security in supabase/schema.sql is what protects the data.
-   Never put the service_role key in this file. */
+   The app reads and writes through the Google Sheet "Triton Bookings — data",
+   via the Apps Script web app deployed from it. Put that /exec URL below and
+   every phone shares the same bookings. Left empty, the app runs in demo mode
+   with data kept in one browser, which is only useful for a demonstration. */
 window.TRITON_CONFIG = {
   PROPERTY_NAME: "Triton",
-  SUPABASE_URL: "",
-  SUPABASE_ANON_KEY: "",
 
-  /* Synthetic email domain used to turn a flat number into a Supabase Auth account.
-     B-1204 becomes b-1204@triton.invalid. Keep ".invalid" — it is reserved and
-     unroutable, so no mail can ever be sent to it. */
-  AUTH_EMAIL_DOMAIN: "triton.invalid",
+  /* The Apps Script web app URL, ending in /exec. Paste it here after deploying
+     the script from the "Triton Bookings — data" sheet. Until it is filled in,
+     the app runs in demo mode with data kept in the browser only. */
+  SHEETS_API_URL: "",
 
   /* Hours a resident has to upload payment proof after approval. */
   PAYMENT_WINDOW_HOURS: 48,
