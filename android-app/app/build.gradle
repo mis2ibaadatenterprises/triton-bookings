@@ -6,6 +6,15 @@
  */
 plugins { id "com.android.application" }
 
+/* Read as variables first. Written inline, Groovy binds the parentheses to the
+   versionCode/versionName call rather than to the expression, and the build
+   fails with "Value is null". */
+def tritonVersionName = (project.findProperty("tritonVersionName") ?: "1.0.0").toString()
+def tritonVersionCode = Integer.parseInt((project.findProperty("tritonVersionCode") ?: "1").toString())
+def tritonKeystorePath = (project.findProperty("tritonKeystore") ?: "../../android/android.keystore").toString()
+def tritonStorePw = (project.findProperty("tritonStorePassword") ?: "").toString()
+def tritonKeyPw = (project.findProperty("tritonKeyPassword") ?: "").toString()
+
 android {
     namespace "in.triton.bookings"
     compileSdk 34
@@ -14,8 +23,8 @@ android {
         applicationId "in.triton.bookings"
         minSdk 23
         targetSdk 34
-        versionCode (project.findProperty("tritonVersionCode") ?: "1").toString().toInteger()
-        versionName (project.findProperty("tritonVersionName") ?: "1.0.0").toString()
+        versionCode tritonVersionCode
+        versionName tritonVersionName
         manifestPlaceholders = [
             hostName    : "mis2ibaadatenterprises.github.io",
             defaultUrl  : "https://mis2ibaadatenterprises.github.io/triton-bookings/",
@@ -25,10 +34,10 @@ android {
 
     signingConfigs {
         release {
-            storeFile file(project.findProperty("tritonKeystore") ?: "../../android/android.keystore")
-            storePassword project.findProperty("tritonStorePassword") ?: ""
+            storeFile file(tritonKeystorePath)
+            storePassword tritonStorePw
             keyAlias "triton"
-            keyPassword project.findProperty("tritonKeyPassword") ?: ""
+            keyPassword tritonKeyPw
         }
     }
 
