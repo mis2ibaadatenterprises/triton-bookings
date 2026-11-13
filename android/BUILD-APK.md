@@ -12,14 +12,11 @@ environment where the project was built.
 Requires Node 18+ and a JDK (17 or newer).
 
 ```bash
-npm install -g @bubblewrap/cli@1.23.0
-cd android
-bubblewrap init --manifest https://mis2ibaadatenterprises.github.io/triton-bookings/manifest.webmanifest
+cd android-app
+gradle wrapper --gradle-version 8.7
 ```
 
-Bubblewrap downloads the Android SDK and JDK on first run (about 1 GB, one time).
-When it asks, accept the values already in `twa-manifest.json` — package id
-`in.triton.bookings`, launcher name `Triton`.
+You need the Android SDK (Android Studio installs it) and a JDK 17.
 
 ### Create the signing key
 
@@ -49,12 +46,19 @@ like a native app.
 ## Every build
 
 ```bash
-bubblewrap build
+cd android-app
+./gradlew :app:assembleRelease :app:bundleRelease \
+  -PtritonVersionName=1.0.0 -PtritonVersionCode=2 \
+  -PtritonKeystore="$PWD/../android/android.keystore" \
+  -PtritonStorePassword=... -PtritonKeyPassword=...
 ```
 
-Produces `app-release-signed.apk` (sideload or test) and `app-release-bundle.aab`
-(what Play wants). Bump `appVersionCode` in `twa-manifest.json` before each Play
-upload — Play rejects a repeat.
+Produces `app/build/outputs/apk/release/app-release.apk` to sideload and
+`app/build/outputs/bundle/release/app-release.aab` for Play. Raise
+`tritonVersionCode` on every Play upload — Play rejects a repeat.
+
+Normally you do not run any of this by hand: the release workflow does it on
+GitHub's runners whenever you start it from the Actions tab.
 
 ## Getting it onto residents' phones
 

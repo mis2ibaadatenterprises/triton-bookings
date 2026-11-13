@@ -101,38 +101,20 @@ jobs:
           fi
 
       - name: Build the APK and the Play bundle
-        env:
-          # Bubblewrap asks to download a JDK and the Android SDK on first run.
-          # The runner already has both, so point its config at them and it
-          # proceeds without prompting.
-          ANDROID_SDK: ${{ env.ANDROID_HOME }}
+        working-directory: android-app
         run: |
-          npm install -g @bubblewrap/cli@1.23.0
-          mkdir -p "$HOME/.bubblewrap"
-          cat > "$HOME/.bubblewrap/config.json" <<JSON
-          {
-            "jdkPath": "$JAVA_HOME",
-            "androidSdkPath": "${ANDROID_SDK:-$ANDROID_HOME}"
-          }
-          JSON
-          cat "$HOME/.bubblewrap/config.json"
-          yes | "${ANDROID_SDK:-$ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
-          cd android
-          # Version numbers come from the tag, not from the file in the repo.
-          node -e "
-            const fs=require('fs');
-            const m=JSON.parse(fs.readFileSync('twa-manifest.json','utf8'));
-            m.appVersionName='${{ needs.version.outputs.version }}';
-            m.appVersionCode=Number(process.env.GITHUB_RUN_NUMBER);
-            fs.writeFileSync('twa-manifest.json', JSON.stringify(m,null,2));
-          "
-          bubblewrap build --skipPwaValidation \
-            --keystorePassword="${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
-            --keyPassword="${{ secrets.ANDROID_KEY_PASSWORD }}"
+          gradle wrapper --gradle-version 8.7
+          ./gradlew --no-daemon :app:assembleRelease :app:bundleRelease \
+            -PtritonVersionName="${{ needs.version.outputs.version }}" \
+            -PtritonVersionCode="${GITHUB_RUN_NUMBER}" \
+            -PtritonKeystore="${GITHUB_WORKSPACE}/android/android.keystore" \
+            -PtritonStorePassword="${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+            -PtritonKeyPassword="${{ secrets.ANDROID_KEY_PASSWORD }}"
           # Fixed names, so the "latest/download" links never go stale.
-          cp app-release-signed.apk ../Triton.apk
-          cp app-release-bundle.aab ../Triton-play-${{ needs.version.outputs.version }}.aab
-          ls -lh ../Triton.apk ../Triton-play-*.aab
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/Triton.apk"
+          cp app/build/outputs/bundle/release/app-release.aab \
+             "$GITHUB_WORKSPACE/Triton-play-${{ needs.version.outputs.version }}.aab"
+          ls -lh "$GITHUB_WORKSPACE"/Triton.apk "$GITHUB_WORKSPACE"/Triton-play-*.aab
 
       - uses: actions/upload-artifact@v4
         with:
