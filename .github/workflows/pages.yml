@@ -1,0 +1,42 @@
+name: Deploy Triton to GitHub Pages
+
+# Every push to main redeploys the site. Phones pick the new version up on the
+# next open — that is the whole auto-update mechanism, for Android and iPhone alike.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp the build into the service worker
+        # Changing CACHE on every deploy guarantees the new shell is fetched
+        # rather than served from an old cache.
+        run: |
+          sed -i "s/triton-v1/triton-${GITHUB_SHA::7}/" app/sw.js
+          grep -n "var CACHE" app/sw.js
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: app
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

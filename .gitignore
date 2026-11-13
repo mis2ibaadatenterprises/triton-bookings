@@ -1,0 +1,6 @@
+android/android.keystore
+android/*.apk
+android/*.aab
+android/.bubblewrap/
+node_modules/
+.DS_Store

@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Triton</title>
+<meta name="description" content="Amenity bookings for Triton clubhouse.">
+<meta name="theme-color" content="#115e59" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101715" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" sizes="192x192">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Triton">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ───────────── login ───────────── -->
+<section id="login" class="loginwrap">
+  <div class="loginbox">
+    <div class="loginbrand">
+      <h1>Triton</h1>
+      <span>Amenity bookings</span>
+    </div>
+
+    <div class="segment" role="tablist" aria-label="Login type">
+      <button type="button" class="seg" id="seg-resident" role="tab" aria-selected="true">Resident</button>
+      <button type="button" class="seg" id="seg-committee" role="tab" aria-selected="false">Committee</button>
+    </div>
+
+    <form id="form-resident" class="loginform" autocomplete="on">
+      <div class="f">
+        <label for="li-flat">Flat number</label>
+        <input type="text" id="li-flat" name="username" inputmode="text" autocapitalize="characters"
+               placeholder="B-1204" autocomplete="username" required>
+        <p class="sub">One login per flat. Tower letter and flat number, as on your maintenance bill.</p>
+      </div>
+      <div class="f">
+        <label for="li-pin">PIN</label>
+        <input type="password" id="li-pin" name="password" inputmode="numeric" pattern="[0-9]*"
+               placeholder="••••" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="btn primary wide">Sign in</button>
+      <p class="loginerr" id="err-resident" hidden></p>
+      <p class="sub">Forgot the PIN? The clubhouse desk resets it on request at the office.</p>
+    </form>
+
+    <form id="form-committee" class="loginform" autocomplete="on" hidden>
+      <div class="f">
+        <label for="li-staff">Committee ID</label>
+        <input type="text" id="li-staff" name="username" autocapitalize="none"
+               placeholder="desk.manager" autocomplete="username" required>
+        <p class="sub">Issued to each committee member individually. Every approval is stamped with this ID.</p>
+      </div>
+      <div class="f">
+        <label for="li-staffpin">Password</label>
+        <input type="password" id="li-staffpin" name="password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="btn primary wide">Sign in</button>
+      <p class="loginerr" id="err-committee" hidden></p>
+    </form>
+
+    <p class="demo" id="demo-note" hidden>
+      <strong>Demo mode.</strong> No server configured, so data stays on this device.
+      Resident <code>B-1204</code> / <code>1204</code> &middot; Committee <code>desk.manager</code> / <code>triton</code>
+    </p>
+  </div>
+</section>
+
+<!-- ───────────── app ───────────── -->
+<div id="app" hidden>
+  <header class="topbar">
+    <div class="wrap">
+      <div class="brand">
+        <h1>Triton</h1>
+        <span id="sub">Amenity bookings</span>
+      </div>
+      <div class="whoami">
+        <div class="who">
+          <strong id="who-name">—</strong>
+          <span id="who-role">—</span>
+        </div>
+        <div class="avatar" id="avatar">—</div>
+        <button type="button" class="btn sm ghost" id="signout">Sign out</button>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tabs"><div class="wrap" id="tabs" role="tablist"></div></nav>
+  <main><div class="wrap" id="view"></div></main>
+</div>
+
+<script src="config.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+<script>
+/* Auto-update. The service worker fetches the shell network-first, so a deploy is
+   picked up on the next open. This adds the in-session case: if a new version lands
+   while somebody has the app open, they get one bar offering the reload, and the
+   app checks again every time it comes back to the foreground. */
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", function () {
+    navigator.serviceWorker.register("sw.js").then(function (reg) {
+      function watch(worker) {
+        if (!worker) return;
+        worker.addEventListener("statechange", function () {
+          if (worker.state === "installed" && navigator.serviceWorker.controller) offerUpdate(worker);
+        });
+      }
+      if (reg.waiting && navigator.serviceWorker.controller) offerUpdate(reg.waiting);
+      reg.addEventListener("updatefound", function () { watch(reg.installing); });
+
+      document.addEventListener("visibilitychange", function () {
+        if (document.visibilityState === "visible") reg.update().catch(function () {});
+      });
+      setInterval(function () { reg.update().catch(function () {}); }, 30 * 60 * 1000);
+    }).catch(function () {});
+
+    var reloading = false;
+    navigator.serviceWorker.addEventListener("controllerchange", function () {
+      if (reloading) return;
+      reloading = true;
+      location.reload();
+    });
+  });
+}
+function offerUpdate(worker) {
+  if (document.querySelector(".updatebar")) return;
+  var bar = document.createElement("div");
+  bar.className = "updatebar";
+  bar.setAttribute("role", "status");
+  bar.innerHTML = "<span>A newer version of Triton is ready.</span>";
+  var btn = document.createElement("button");
+  btn.type = "button";
+  btn.textContent = "Update now";
+  btn.onclick = function () { btn.textContent = "Updating…"; worker.postMessage("skip-waiting"); };
+  bar.appendChild(btn);
+  document.body.appendChild(bar);
+}
+</script>
+</body>
+</html>
