@@ -4,3 +4,5 @@ android/*.aab
 android/.bubblewrap/
 node_modules/
 .DS_Store
+android/keystore.base64.txt
+android/*.base64.txt
