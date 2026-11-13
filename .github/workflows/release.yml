@@ -101,8 +101,22 @@ jobs:
           fi
 
       - name: Build the APK and the Play bundle
+        env:
+          # Bubblewrap asks to download a JDK and the Android SDK on first run.
+          # The runner already has both, so point its config at them and it
+          # proceeds without prompting.
+          ANDROID_SDK: ${{ env.ANDROID_HOME }}
         run: |
           npm install -g @bubblewrap/cli@1.23.0
+          mkdir -p "$HOME/.bubblewrap"
+          cat > "$HOME/.bubblewrap/config.json" <<JSON
+          {
+            "jdkPath": "$JAVA_HOME",
+            "androidSdkPath": "${ANDROID_SDK:-$ANDROID_HOME}"
+          }
+          JSON
+          cat "$HOME/.bubblewrap/config.json"
+          yes | "${ANDROID_SDK:-$ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
           cd android
           # Version numbers come from the tag, not from the file in the repo.
           node -e "
