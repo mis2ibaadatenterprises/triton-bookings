@@ -1,0 +1,34 @@
+{
+  "name": "triton-bookings-desktop",
+  "productName": "Triton",
+  "version": "1.0.0",
+  "description": "Triton clubhouse bookings",
+  "main": "main.js",
+  "author": "Triton Clubhouse",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win --publish never"
+  },
+  "devDependencies": {
+    "electron": "32.2.6",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "in.triton.bookings",
+    "productName": "Triton",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "package.json", "icon.ico"],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "artifactName": "Triton-Setup-${version}.${ext}",
+      "shortcutName": "Triton"
+    }
+  }
+}

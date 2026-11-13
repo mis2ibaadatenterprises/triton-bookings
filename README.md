@@ -90,7 +90,7 @@ same way. You only rebuild the APK to change the icon, name or notification setu
 
 ## Phones
 
-- **Android** — `android/BUILD-APK.md`. One Bubblewrap command produces the APK and
+- **Android** — install link and release steps are in `INSTALL.md`; `android/BUILD-APK.md` covers building by hand.
   the Play bundle. Distribute through a Play closed testing track.
 - **iPhone** — open the site in Safari, Share → Add to Home Screen. No build, no
   store, automatic updates.
