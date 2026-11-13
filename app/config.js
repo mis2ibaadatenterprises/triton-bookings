@@ -9,7 +9,7 @@ window.TRITON_CONFIG = {
   /* The Apps Script web app URL, ending in /exec. Paste it here after deploying
      the script from the "Triton Bookings — data" sheet. Until it is filled in,
      the app runs in demo mode with data kept in the browser only. */
-  SHEETS_API_URL: "",
+  SHEETS_API_URL: "https://script.google.com/macros/s/AKfycbyDFot93XsndmdrlOIjFRmkB2U4DJAa5TFpFRrhaU7VDCwozAnyfJzjrKSCiyiSMZOT0Q/exec",
 
   /* Hours a resident has to upload payment proof after approval. */
   PAYMENT_WINDOW_HOURS: 48,
