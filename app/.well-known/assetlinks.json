@@ -4,9 +4,7 @@
     "target": {
       "namespace": "android_app",
       "package_name": "in.triton.bookings",
-      "sha256_cert_fingerprints": [
-        "REPLACE_WITH_YOUR_SIGNING_KEY_SHA256_FINGERPRINT"
-      ]
+      "sha256_cert_fingerprints": ["63:AB:3F:CE:94:8B:84:E1:7C:BD:1E:58:F9:6D:FC:3A:BB:4F:2B:60:9D:74:EC:0D:0A:FA:90:84:DF:84:7B:15"]
     }
   }
 ]
