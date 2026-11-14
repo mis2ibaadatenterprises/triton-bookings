@@ -17,6 +17,8 @@
     spaces: null,
     notices: [],
     issues: [],
+    dues: [],
+    interest: { afterDays: 7, percent: 2 },
     _session: null,
     _token: null
   };
@@ -72,6 +74,10 @@
     return call("list", {}).then(function (d) {
       Data._session = d.me;
       Data.spaces = d.spaces;
+      Data.notices = d.notices || [];
+      Data.issues = d.issues || [];
+      Data.dues = d.dues || [];
+      if (d.interest) Data.interest = d.interest;
       Data._cache = d.bookings;
       return d.me;
     }).catch(function () {
@@ -98,6 +104,7 @@
     Data._cache = null;
     Data.notices = [];
     Data.issues = [];
+    Data.dues = [];
     if (Data.mode === "demo") { store(DEMO_SESSION, null); return Promise.resolve(); }
     var p = Data._token ? call("signOut", {}).catch(function () {}) : Promise.resolve();
     Data._token = null; store(TOKEN_KEY, null);
@@ -113,6 +120,8 @@
       Data.spaces = d.spaces;
       Data.notices = d.notices || [];
       Data.issues = d.issues || [];
+      Data.dues = d.dues || [];
+      if (d.interest) Data.interest = d.interest;
       return d.bookings;
     });
   };
@@ -190,6 +199,11 @@
     if (Data.mode === "demo") return Promise.reject(new Error("Not connected to the booking sheet."));
     return call("editNotice", Object.assign({ id: id }, patch));
   };
+
+  /* ───────────── money owed ───────────── */
+  Data.addDue = function (due) { return call("addDue", due); };
+  Data.dueUpdate = function (id, status) { return call("dueUpdate", { id: id, status: status }); };
+  Data.interestDecision = function (id, apply) { return call("interest", { id: id, apply: !!apply }); };
 
   /* ───────────── issues ───────────── */
   Data.raiseIssue = function (category, detail, file) {

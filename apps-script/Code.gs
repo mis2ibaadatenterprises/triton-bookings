@@ -24,6 +24,7 @@ var SHEET_SPACES   = "Spaces";
 var SHEET_SESSIONS = "Sessions";
 var SHEET_NOTICES  = "Notices";
 var SHEET_ISSUES   = "Issues";
+var SHEET_DUES     = "Dues";
 var SHEET_AUDIT    = "Audit";
 
 var SESSION_DAYS   = 30;   // how long a phone stays signed in
@@ -31,6 +32,12 @@ var WINDOW_HOURS   = 48;   // payment window after approval
 var PROOF_FOLDER   = "Triton payment proofs";
 var ISSUE_FOLDER   = "Triton issue photos";
 var MAX_TRIES      = 8;    // wrong PINs allowed per login per 15 minutes
+
+/* Money owed. A charge becomes overdue the day after its due date; once it has
+   been overdue this long the committee is asked whether to add interest. The
+   decision is theirs every time — nothing is charged automatically. */
+var INTEREST_AFTER_DAYS = 7;
+var INTEREST_PERCENT    = 2;   // of the unpaid amount, charged once
 
 /* ───────────────────────── entry points ───────────────────────── */
 
@@ -56,6 +63,9 @@ function handle(e) {
     else if (action === "raiseIssue") out = ok(raiseIssue(body));
     else if (action === "issueUpdate") out = ok(issueUpdate(body));
     else if (action === "issuePhoto") out = ok(issuePhoto(body));
+    else if (action === "addDue")     out = ok(addDue(body));
+    else if (action === "dueUpdate")  out = ok(dueUpdate(body));
+    else if (action === "interest")   out = ok(interestDecision(body));
     else if (action === "signOut") out = ok(signOut(body));
     else if (action === "ping")   out = ok({ pong: true, version: 1 });
     else out = fail("Unknown action: " + action);
@@ -277,7 +287,11 @@ function list(body) {
   var all = rows(SHEET_BOOKINGS).filter(function (r) { return r.id; }).map(toBooking);
 
   if (me.role === "committee") {
-    return { me: me, bookings: all, spaces: spaces(), notices: notices(), issues: issues(me) };
+    return {
+      me: me, bookings: all, spaces: spaces(), notices: notices(),
+      issues: issues(me), dues: dues(me),
+      interest: { afterDays: INTEREST_AFTER_DAYS, percent: INTEREST_PERCENT }
+    };
   }
 
   /* A resident gets their own bookings in full, plus a stripped view of
@@ -295,7 +309,11 @@ function list(body) {
       });
     }
   });
-  return { me: me, bookings: out, spaces: spaces(), notices: notices(), issues: issues(me) };
+  return {
+    me: me, bookings: out, spaces: spaces(), notices: notices(),
+    issues: issues(me), dues: dues(me),
+    interest: { afterDays: INTEREST_AFTER_DAYS, percent: INTEREST_PERCENT }
+  };
 }
 
 function create(body) {
@@ -393,6 +411,127 @@ function writeRow(row, set) {
   Object.keys(set).forEach(function (k) {
     s.getRange(row, colIndex(SHEET_BOOKINGS, k)).setValue(set[k]);
   });
+}
+
+/* ───────────────────────── money owed ─────────────────────────
+   Maintenance, penalties and interest live here. What is owed on bookings is
+   not copied in — it is read from the booking itself, so the two can never
+   disagree. */
+
+var DUE_CATEGORIES = ["maintenance", "penalty", "interest"];
+
+function dues(me) {
+  var today = startOfToday();
+  var all = rows(SHEET_DUES).filter(function (r) { return r.id; }).map(function (r) {
+    var due = r.due_date ? new Date(r.due_date) : null;
+    var status = String(r.status || "pending").trim();
+    var overdueDays = (due && status === "pending")
+      ? Math.floor((today - startOfDay(due)) / 864e5) : 0;
+    return {
+      id: String(r.id).trim(),
+      unit: String(r.flat || "").trim(),
+      category: String(r.category || "maintenance").trim(),
+      description: String(r.description || "").trim(),
+      amount: Number(r.amount) || 0,
+      due_date: due ? fmtDate(due) : "",
+      status: status,
+      overdueDays: overdueDays > 0 ? overdueDays : 0,
+      interest_decision: String(r.interest_decision || "").trim(),
+      parent: String(r.parent || "").trim(),
+      raised_by: String(r.raised_by || "").trim(),
+      created_at: r.created_at ? new Date(r.created_at).getTime() : null,
+      settled_at: r.settled_at ? new Date(r.settled_at).getTime() : null
+    };
+  });
+  if (me.role === "committee") return all;
+  return all.filter(function (d) { return d.unit === me.unit; });
+}
+function startOfDay(d) { var x = new Date(d); x.setHours(0, 0, 0, 0); return x.getTime(); }
+function startOfToday() { return startOfDay(new Date()); }
+
+function addDue(body) {
+  var me = session(body);
+  if (me.role !== "committee") throw new Error("Only the committee can raise a charge.");
+  var unit = String(body.unit || "").trim();
+  var category = String(body.category || "").trim();
+  var amount = Math.round(Number(body.amount));
+  if (!unit) throw new Error("Which flat is this for?");
+  if (DUE_CATEGORIES.indexOf(category) < 0) throw new Error("Unknown kind of charge.");
+  if (!(amount > 0)) throw new Error("Enter an amount.");
+
+  var known = false;
+  rows(SHEET_LOGINS).forEach(function (r) {
+    if (String(r.flat || "").trim().toUpperCase() === unit.toUpperCase()) known = true;
+  });
+  if (!known) throw new Error("No flat " + unit + " in the Logins tab.");
+
+  var id = nextDueId();
+  tab(SHEET_DUES).appendRow([
+    id, unit, category, String(body.description || "").trim(),
+    amount, String(body.due_date || "").trim(), "pending", "", "",
+    me.login, new Date(), ""
+  ]);
+  audit(me.login, "due-" + category, id, unit + " " + amount);
+  return { id: id };
+}
+function nextDueId() {
+  var n = 0;
+  rows(SHEET_DUES).forEach(function (r) {
+    var m = String(r.id).match(/DUE-(\d+)/);
+    if (m) n = Math.max(n, Number(m[1]));
+  });
+  return "DUE-" + String(n + 1).padStart(4, "0");
+}
+
+function dueUpdate(body) {
+  var me = session(body);
+  if (me.role !== "committee") throw new Error("Only the committee can settle a charge.");
+  var id = String(body.id || ""), status = String(body.status || "");
+  if (["pending", "paid", "waived"].indexOf(status) < 0) throw new Error("Unknown status.");
+
+  var s = tab(SHEET_DUES), hit = null;
+  rows(SHEET_DUES).forEach(function (r) { if (String(r.id).trim() === id) hit = r; });
+  if (!hit) throw new Error("That charge is no longer in the ledger.");
+
+  s.getRange(hit._row, colIndex(SHEET_DUES, "status")).setValue(status);
+  s.getRange(hit._row, colIndex(SHEET_DUES, "settled_at")).setValue(status === "pending" ? "" : new Date());
+  audit(me.login, "due-" + status, id, "");
+  return { id: id, status: status };
+}
+
+/* The committee is asked once per overdue charge. "yes" adds a separate interest
+   line against the same flat; "no" records that it was waived, so the charge
+   stops being offered. Either way the decision is written down and attributable. */
+function interestDecision(body) {
+  var me = session(body);
+  if (me.role !== "committee") throw new Error("Only the committee can decide on interest.");
+  var id = String(body.id || "");
+  var apply = !!body.apply;
+
+  var s = tab(SHEET_DUES), hit = null;
+  rows(SHEET_DUES).forEach(function (r) { if (String(r.id).trim() === id) hit = r; });
+  if (!hit) throw new Error("That charge is no longer in the ledger.");
+  if (String(hit.status).trim() !== "pending") throw new Error("That charge is already settled.");
+  if (String(hit.interest_decision || "").trim()) throw new Error("Interest has already been decided on this one.");
+
+  s.getRange(hit._row, colIndex(SHEET_DUES, "interest_decision")).setValue(apply ? "applied" : "waived");
+
+  if (!apply) {
+    audit(me.login, "interest-waived", id, "");
+    return { id: id, applied: false };
+  }
+
+  var amount = Math.round((Number(hit.amount) || 0) * INTEREST_PERCENT / 100);
+  if (amount < 1) amount = 1;
+  var childId = nextDueId();
+  tab(SHEET_DUES).appendRow([
+    childId, String(hit.flat).trim(), "interest",
+    INTEREST_PERCENT + "% on " + id + " (" + String(hit.description || hit.category).trim() + ")",
+    amount, fmtDate(new Date(Date.now() + 7 * 864e5)), "pending", "", id,
+    me.login, new Date(), ""
+  ]);
+  audit(me.login, "interest-applied", childId, id + " " + amount);
+  return { id: childId, applied: true, amount: amount };
 }
 
 /* ───────────────────────── notice board ─────────────────────────

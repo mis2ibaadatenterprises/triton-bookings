@@ -167,6 +167,7 @@
       return [
         { id: "book", label: "Book a space" },
         { id: "mine", label: "My bookings", cnt: due },
+        { id: "dues", label: "Dues", cnt: myPendingDues().length },
         { id: "notices", label: "Notices", cnt: unseenNotices().length },
         { id: "issues", label: "Report an issue" },
         { id: "rules", label: "Rules" }
@@ -178,6 +179,7 @@
       { id: "pending", label: "Pending work", cnt: req + ver },
       { id: "approvals", label: "Approvals", cnt: req },
       { id: "payments", label: "Payments", cnt: ver },
+      { id: "dues", label: "Dues", cnt: interestPending().length },
       { id: "issues", label: "Issues", cnt: openIssues().length },
       { id: "notices", label: "Notice board" },
       { id: "register", label: "Register" },
@@ -237,17 +239,21 @@
 
     var h = committeePipe() + '<div class="queue">';
     h += qcard("Requests to approve", toApprove, "approvals", "Nothing waiting for a decision.", false, function (b) {
-      return esc(b.unit) + " · " + esc(FMAP[b.facility].name) + " · " + prettyDate(b.date);
+      return esc(b.unit) + " · " + esc((FMAP[b.facility] || {}).name || b.facility) + " · " + prettyDate(b.date);
     }, function (b) { return money(b.amount); });
     h += qcard("Proof to verify", toVerify, "payments", "No payment pictures waiting.", false, function (b) {
-      return esc(b.unit) + " · " + money(b.amount) + " · " + esc(FMAP[b.facility].name);
+      return esc(b.unit) + " · " + money(b.amount) + " · " + esc((FMAP[b.facility] || {}).name || b.facility);
     }, function (b) { return "sent " + stamp(b.proof ? b.proof.at : b.approved_at); });
     h += qcard("Clock running out", expiring, "payments", "No payment deadline inside 24 hours.", true, function (b) {
-      return esc(b.unit) + " · " + money(b.amount) + " · " + esc(FMAP[b.facility].name);
+      return esc(b.unit) + " · " + money(b.amount) + " · " + esc((FMAP[b.facility] || {}).name || b.facility);
     }, function (b) { return countdown(deadline(b) - now); });
     h += qcard("On today", todays, "day", "Nothing booked for today.", false, function (b) {
-      return esc(b.unit) + " · " + esc(FMAP[b.facility].name);
+      return esc(b.unit) + " · " + esc((FMAP[b.facility] || {}).name || b.facility);
     }, function (b) { return slotTimes(b); });
+    h += qcard("Interest to decide", interestPending(), "dues",
+      "No charge is overdue long enough to need a decision.", true, function (d) {
+        return esc(d.unit) + " · " + CATLABEL[d.category];
+      }, function (d) { return d.overdueDays + " days overdue"; });
     h += "</div>";
 
     viewEl.innerHTML = h;
@@ -492,6 +498,231 @@
     document.getElementById("prev").onclick = function () { S.date = addDays(S.date, -1); render(); };
     document.getElementById("next").onclick = function () { S.date = addDays(S.date, 1); render(); };
     document.getElementById("today").onclick = function () { S.date = iso(new Date()); render(); };
+  }
+
+  /* ───────────── money owed ─────────────
+     Maintenance, penalties and interest come from the Dues tab of the sheet.
+     What is owed on bookings is read from the bookings themselves, so the two
+     can never drift apart. */
+  var CATLABEL = { maintenance: "Maintenance", penalty: "Penalties", interest: "Interest", booking: "Bookings" };
+
+  function pendingDues() {
+    return (Data.dues || []).filter(function (d) { return d.status === "pending"; });
+  }
+  function myPendingDues() {
+    if (!S.me) return [];
+    return pendingDues().filter(function (d) { return d.unit === S.me.unit; });
+  }
+  /* A booking shown as money owed: approved, with its payment clock running. */
+  function bookingDues(unit) {
+    return S.bookings.filter(function (b) {
+      return b.status === "approved" && b.id && (!unit || b.unit === unit);
+    }).map(function (b) {
+      var f = FMAP[b.facility] || { name: b.facility };
+      return {
+        id: b.id, unit: b.unit, category: "booking",
+        description: f.name + " on " + prettyDate(b.date),
+        amount: b.amount, due_date: "", status: "pending",
+        overdueDays: 0, booking: b
+      };
+    });
+  }
+  /* Overdue long enough that the committee has not yet said yes or no to interest. */
+  function interestPending() {
+    var after = (Data.interest && Data.interest.afterDays) || 7;
+    return pendingDues().filter(function (d) {
+      return d.category !== "interest" && d.overdueDays >= after && !d.interest_decision;
+    });
+  }
+  function sumBy(list, cat) {
+    return list.filter(function (d) { return d.category === cat; })
+               .reduce(function (t, d) { return t + (d.amount || 0); }, 0);
+  }
+  function catStrip(list) {
+    var cats = ["maintenance", "penalty", "interest", "booking"];
+    var total = list.reduce(function (t, d) { return t + (d.amount || 0); }, 0);
+    return '<div class="pipe">' + cats.map(function (c) {
+      var items = list.filter(function (d) { return d.category === c; });
+      var overdue = items.filter(function (d) { return d.overdueDays > 0; }).length;
+      return cell(CATLABEL[c], money(sumBy(list, c)),
+        items.length ? items.length + " item" + (items.length > 1 ? "s" : "") +
+          (overdue ? " · " + overdue + " overdue" : "") : "nothing pending",
+        overdue ? "alert" : "");
+    }).join("") + cell("Total pending", money(total), list.length + " item" + (list.length === 1 ? "" : "s"), "") + "</div>";
+  }
+
+  function dueRow(d, forCommittee) {
+    var tone = d.overdueDays > 0 ? "cancelled_nopay" : "requested";
+    if (d.category === "interest") tone = "approved";
+    var h = '<div class="row" data-s="' + tone + '" data-due="' + esc(d.id) + '"><div class="rmain">' +
+      '<div class="rid">' + esc(d.id) + (forCommittee ? " &middot; " + esc(d.unit) : "") + "</div>" +
+      '<div class="rtitle">' + CATLABEL[d.category] + (d.description ? " &middot; " + esc(d.description) : "") + "</div>";
+
+    var line = [];
+    if (d.due_date) line.push("Due " + prettyDate(d.due_date));
+    if (d.overdueDays > 0) line.push(d.overdueDays + " day" + (d.overdueDays > 1 ? "s" : "") + " overdue");
+    if (d.category === "booking" && d.booking && d.booking.approved_at) {
+      line.push(countdown(deadline(d.booking) - Date.now()) + " to upload the receipt");
+    }
+    if (d.interest_decision === "waived") line.push("interest waived by the committee");
+    if (d.interest_decision === "applied") line.push("interest added");
+    if (line.length) h += '<div class="rsub">' + line.join(" &middot; ") + "</div>";
+
+    h += '</div><div class="rside"><span class="amt">' + money(d.amount) + "</span>";
+    if (d.overdueDays > 0) h += '<span class="clock hot">Overdue</span>';
+    if (forCommittee && d.category !== "booking") {
+      h += '<div class="actions"><button class="btn sm primary" data-due-act="paid">Mark paid</button>' +
+        '<button class="btn sm" data-due-act="waived">Waive</button></div>';
+    }
+    return h + "</div></div>";
+  }
+
+  function renderDues() {
+    if (isResident()) return renderResidentDues();
+    return renderCommitteeDues();
+  }
+
+  function renderResidentDues() {
+    var list = myPendingDues().concat(bookingDues(S.me.unit)).sort(function (a, b) {
+      return (b.overdueDays - a.overdueDays) || (a.due_date < b.due_date ? -1 : 1);
+    });
+    var h = catStrip(list);
+    var overdue = list.filter(function (d) { return d.overdueDays > 0; });
+    var after = (Data.interest && Data.interest.afterDays) || 7;
+    var pct = (Data.interest && Data.interest.percent) || 2;
+
+    if (overdue.length) {
+      h += '<div class="note" style="margin-bottom:16px">' + overdue.length +
+        (overdue.length === 1 ? " charge is" : " charges are") + " past the due date. Anything still unpaid after " +
+        after + " days can have " + pct + "% interest added, at the committee's discretion.</div>";
+    }
+    if (!list.length) {
+      h += '<div class="empty"><strong>Nothing outstanding</strong>Maintenance, penalties and booking charges appear here as the committee raises them.</div>';
+    } else {
+      h += '<div class="rows">' + list.map(function (d) { return dueRow(d, false); }).join("") + "</div>";
+    }
+
+    var settled = (Data.dues || []).filter(function (d) { return d.status !== "pending" && d.unit === S.me.unit; });
+    if (settled.length) {
+      h += '<h3 style="font-size:14px;margin:20px 0 10px">Settled</h3><div class="rows">' +
+        settled.slice(0, 12).map(function (d) {
+          return '<div class="row" data-s="confirmed"><div class="rmain">' +
+            '<div class="rid">' + esc(d.id) + "</div>" +
+            '<div class="rtitle">' + CATLABEL[d.category] + (d.description ? " &middot; " + esc(d.description) : "") + "</div>" +
+            '<div class="rsub">' + (d.status === "waived" ? "Waived by the committee" : "Paid") +
+            (d.settled_at ? " &middot; " + stamp(d.settled_at) : "") + "</div></div>" +
+            '<div class="rside"><span class="badge" data-s="confirmed">' +
+            (d.status === "waived" ? "Waived" : "Paid") + '</span><span class="amt">' + money(d.amount) + "</span></div></div>";
+        }).join("") + "</div>";
+    }
+    viewEl.innerHTML = h;
+  }
+
+  function renderCommitteeDues() {
+    var list = pendingDues().concat(bookingDues(null));
+    var waiting = interestPending();
+    var after = (Data.interest && Data.interest.afterDays) || 7;
+    var pct = (Data.interest && Data.interest.percent) || 2;
+    var h = catStrip(list);
+
+    /* Decide on interest first — it is the only thing here that needs a judgement. */
+    if (waiting.length) {
+      h += '<div class="card" style="margin-bottom:16px"><h3 style="font-size:15px;margin-bottom:4px">' +
+        "Overdue more than " + after + " days</h3>" +
+        '<p class="hint" style="margin-bottom:11px">' + pct +
+        "% interest is added only if you say so. Either answer is recorded against your login.</p>" +
+        '<div class="rows">' + waiting.map(function (d) {
+          return '<div class="row" data-s="cancelled_nopay" data-due="' + esc(d.id) + '"><div class="rmain">' +
+            '<div class="rid">' + esc(d.id) + " &middot; " + esc(d.unit) + "</div>" +
+            '<div class="rtitle">' + CATLABEL[d.category] + (d.description ? " &middot; " + esc(d.description) : "") + "</div>" +
+            '<div class="rsub">Due ' + prettyDate(d.due_date) + " &middot; " + d.overdueDays + " days overdue &middot; interest would be " +
+            money(Math.max(1, Math.round(d.amount * pct / 100))) + "</div></div>" +
+            '<div class="rside"><span class="amt">' + money(d.amount) + "</span>" +
+            '<div class="actions"><button class="btn sm primary" data-int="yes">Apply interest</button>' +
+            '<button class="btn sm" data-int="no">Not this time</button></div></div></div>';
+        }).join("") + "</div></div>";
+    }
+
+    /* Raise a charge. */
+    var flats = [];
+    (Data.dues || []).forEach(function (d) { if (flats.indexOf(d.unit) < 0) flats.push(d.unit); });
+    S.bookings.forEach(function (b) { if (b.unit && flats.indexOf(b.unit) < 0) flats.push(b.unit); });
+    flats.sort();
+    h += '<div class="card" style="margin-bottom:16px"><h3 style="font-size:15px;margin-bottom:10px">Raise a charge</h3>' +
+      '<div class="formrow">' +
+      '<div class="f"><label for="du-flat">Flat</label><input type="text" id="du-flat" list="du-flats" placeholder="B-1204">' +
+      '<datalist id="du-flats">' + flats.map(function (f) { return '<option value="' + esc(f) + '">'; }).join("") + "</datalist></div>" +
+      '<div class="f"><label for="du-cat">Kind</label><select id="du-cat">' +
+      '<option value="maintenance">Maintenance</option><option value="penalty">Penalty</option></select></div>' +
+      '<div class="f"><label for="du-amt">Amount</label><input type="number" id="du-amt" min="1" placeholder="2500"></div>' +
+      '<div class="f"><label for="du-date">Due by</label><input type="date" id="du-date" value="' + addDays(iso(new Date()), 14) + '"></div>' +
+      '</div><div class="formrow"><div class="f" style="grid-column:1/-1"><label for="du-desc">What it is for</label>' +
+      '<input type="text" id="du-desc" placeholder="November maintenance"></div></div>' +
+      '<div class="actions"><button class="btn primary" id="du-go" type="button">Add to the ledger</button>' +
+      '<span class="hint">The resident sees it in their Dues tab straight away.</span></div></div>';
+
+    if (!list.length) {
+      h += '<div class="empty"><strong>Nothing outstanding</strong>Every flat is up to date.</div>';
+    } else {
+      /* Grouped by flat, so a committee member can see who owes what. */
+      var byFlat = {};
+      list.forEach(function (d) { (byFlat[d.unit] = byFlat[d.unit] || []).push(d); });
+      h += Object.keys(byFlat).sort().map(function (unit) {
+        var items = byFlat[unit];
+        var total = items.reduce(function (t, d) { return t + d.amount; }, 0);
+        var od = items.filter(function (d) { return d.overdueDays > 0; }).length;
+        return '<h3 style="font-size:14px;margin:20px 0 10px">' + esc(unit) +
+          ' <span class="hint" style="font-weight:400">— ' + money(total) + " pending" +
+          (od ? ", " + od + " overdue" : "") + '</span></h3><div class="rows">' +
+          items.map(function (d) { return dueRow(d, true); }).join("") + "</div>";
+      }).join("");
+    }
+
+    viewEl.innerHTML = h;
+    wireDues();
+  }
+
+  function wireDues() {
+    var go = document.getElementById("du-go");
+    if (go) {
+      go.onclick = function () {
+        var unit = (document.getElementById("du-flat").value || "").trim();
+        var amount = parseInt(document.getElementById("du-amt").value, 10);
+        if (!unit) { toast("Which flat is this for?"); return; }
+        if (!(amount > 0)) { toast("Enter an amount."); return; }
+        go.disabled = true; go.textContent = "Adding…";
+        Data.addDue({
+          unit: unit,
+          category: document.getElementById("du-cat").value,
+          amount: amount,
+          due_date: document.getElementById("du-date").value,
+          description: (document.getElementById("du-desc").value || "").trim()
+        }).then(function (r) { toast((r && r.id ? r.id : "Charge") + " added for " + unit + "."); return refresh(); })
+          .catch(function (e) { toast(e.message); go.disabled = false; go.textContent = "Add to the ledger"; });
+      };
+    }
+    Array.prototype.forEach.call(viewEl.querySelectorAll("[data-due-act]"), function (el) {
+      var id = el.closest("[data-due]").dataset.due;
+      el.onclick = function () {
+        el.disabled = true;
+        Data.dueUpdate(id, el.dataset.dueAct)
+          .then(function () { toast(id + " marked " + el.dataset.dueAct + "."); return refresh(); })
+          .catch(function (e) { toast(e.message); el.disabled = false; });
+      };
+    });
+    Array.prototype.forEach.call(viewEl.querySelectorAll("[data-int]"), function (el) {
+      var id = el.closest("[data-due]").dataset.due;
+      el.onclick = function () {
+        var apply = el.dataset.int === "yes";
+        el.disabled = true;
+        Data.interestDecision(id, apply)
+          .then(function (r) {
+            toast(apply ? "Interest of " + money(r.amount) + " added." : "No interest on " + id + ".");
+            return refresh();
+          })
+          .catch(function (e) { toast(e.message); el.disabled = false; });
+      };
+    });
   }
 
   /* ───────────── notice board ─────────────
@@ -780,6 +1011,7 @@
     else if (t === "register") renderList(committeePipe(), function () { return true; },
       "The register is empty", "Every booking, in every state, is listed here.");
     else if (t === "day") renderDay();
+    else if (t === "dues") renderDues();
     else if (t === "notices") renderNotices();
     else if (t === "issues") renderIssues();
     else if (t === "rules") renderRules();
