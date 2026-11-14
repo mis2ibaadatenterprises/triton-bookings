@@ -109,7 +109,7 @@
     document.getElementById("who-name").textContent = S.me.name;
     document.getElementById("who-role").textContent = isResident() ? S.me.unit : "Committee";
     document.getElementById("avatar").textContent = initials(S.me.name);
-    document.getElementById("sub").textContent = isResident() ? "Your bookings" : "Clubhouse desk";
+    document.getElementById("sub").textContent = isResident() ? "Your bookings" : "Committee";
     S.tab = isResident() ? "book" : "pending";
     S.bookings = [];
     lastNoticeIds = null;
