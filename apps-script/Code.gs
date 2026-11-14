@@ -22,11 +22,14 @@ var SHEET_LOGINS   = "Logins";
 var SHEET_BOOKINGS = "Bookings";
 var SHEET_SPACES   = "Spaces";
 var SHEET_SESSIONS = "Sessions";
+var SHEET_NOTICES  = "Notices";
+var SHEET_ISSUES   = "Issues";
 var SHEET_AUDIT    = "Audit";
 
 var SESSION_DAYS   = 30;   // how long a phone stays signed in
 var WINDOW_HOURS   = 48;   // payment window after approval
 var PROOF_FOLDER   = "Triton payment proofs";
+var ISSUE_FOLDER   = "Triton issue photos";
 var MAX_TRIES      = 8;    // wrong PINs allowed per login per 15 minutes
 
 /* ───────────────────────── entry points ───────────────────────── */
@@ -48,6 +51,11 @@ function handle(e) {
     else if (action === "update") out = ok(update(body));
     else if (action === "proof")  out = ok(saveProof(body));
     else if (action === "proofImage") out = ok(proofImage(body));
+    else if (action === "addNotice")  out = ok(addNotice(body));
+    else if (action === "editNotice") out = ok(editNotice(body));
+    else if (action === "raiseIssue") out = ok(raiseIssue(body));
+    else if (action === "issueUpdate") out = ok(issueUpdate(body));
+    else if (action === "issuePhoto") out = ok(issuePhoto(body));
     else if (action === "signOut") out = ok(signOut(body));
     else if (action === "ping")   out = ok({ pong: true, version: 1 });
     else out = fail("Unknown action: " + action);
@@ -268,7 +276,9 @@ function list(body) {
   expireUnpaid();
   var all = rows(SHEET_BOOKINGS).filter(function (r) { return r.id; }).map(toBooking);
 
-  if (me.role === "committee") return { me: me, bookings: all, spaces: spaces() };
+  if (me.role === "committee") {
+    return { me: me, bookings: all, spaces: spaces(), notices: notices(), issues: issues(me) };
+  }
 
   /* A resident gets their own bookings in full, plus a stripped view of
      everyone else's live bookings — enough to grey out taken slots, with no
@@ -285,7 +295,7 @@ function list(body) {
       });
     }
   });
-  return { me: me, bookings: out, spaces: spaces() };
+  return { me: me, bookings: out, spaces: spaces(), notices: notices(), issues: issues(me) };
 }
 
 function create(body) {
@@ -383,6 +393,159 @@ function writeRow(row, set) {
   Object.keys(set).forEach(function (k) {
     s.getRange(row, colIndex(SHEET_BOOKINGS, k)).setValue(set[k]);
   });
+}
+
+/* ───────────────────────── notice board ─────────────────────────
+   Residents can read notices; only the committee can post one. */
+
+function notices() {
+  return rows(SHEET_NOTICES).filter(function (r) { return r.id; }).map(function (r) {
+    return {
+      id: String(r.id).trim(),
+      title: String(r.title || "").trim(),
+      body: String(r.body || "").trim(),
+      pinned: String(r.pinned || "").toLowerCase() === "yes",
+      posted_at: r.posted_at ? new Date(r.posted_at).getTime() : null,
+      posted_by: String(r.posted_by || "").trim()
+    };
+  }).sort(function (a, b) {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    return (b.posted_at || 0) - (a.posted_at || 0);
+  });
+}
+
+function addNotice(body) {
+  var me = session(body);
+  if (me.role !== "committee") throw new Error("Only the committee can post a notice.");
+  var title = String(body.title || "").trim();
+  var text  = String(body.body || "").trim();
+  if (!title) throw new Error("Give the notice a heading.");
+  if (!text)  throw new Error("Write the notice itself.");
+
+  var n = 0;
+  rows(SHEET_NOTICES).forEach(function (r) {
+    var m = String(r.id).match(/NTC-(\d+)/);
+    if (m) n = Math.max(n, Number(m[1]));
+  });
+  var id = "NTC-" + String(n + 1).padStart(4, "0");
+
+  tab(SHEET_NOTICES).appendRow([
+    id, title, text, body.pinned ? "yes" : "", new Date(), me.name
+  ]);
+  audit(me.login, "notice", id, title);
+  return { id: id };
+}
+
+function editNotice(body) {
+  var me = session(body);
+  if (me.role !== "committee") throw new Error("Only the committee can change a notice.");
+  var id = String(body.id || "");
+  var s = tab(SHEET_NOTICES), hit = null;
+  rows(SHEET_NOTICES).forEach(function (r) { if (String(r.id).trim() === id) hit = r; });
+  if (!hit) throw new Error("That notice is no longer on the board.");
+
+  if (body.remove) {
+    s.deleteRow(hit._row);
+    audit(me.login, "notice-remove", id, "");
+    return { removed: true };
+  }
+  if (typeof body.pinned !== "undefined") {
+    s.getRange(hit._row, colIndex(SHEET_NOTICES, "pinned")).setValue(body.pinned ? "yes" : "");
+  }
+  if (body.title) s.getRange(hit._row, colIndex(SHEET_NOTICES, "title")).setValue(String(body.title));
+  if (body.body)  s.getRange(hit._row, colIndex(SHEET_NOTICES, "body")).setValue(String(body.body));
+  audit(me.login, "notice-edit", id, "");
+  return { id: id };
+}
+
+/* ───────────────────────── issues ─────────────────────────
+   A resident reports a problem, with a photo where it helps. They see their own
+   flat's issues; the committee sees all of them. */
+
+function issues(me) {
+  var all = rows(SHEET_ISSUES).filter(function (r) { return r.id; }).map(function (r) {
+    return {
+      id: String(r.id).trim(),
+      unit: String(r.flat || "").trim(),
+      resident: String(r.resident || "").trim(),
+      category: String(r.category || "").trim(),
+      detail: String(r.detail || "").trim(),
+      status: String(r.status || "open").trim(),
+      reply: String(r.reply || "").trim(),
+      photo: r.photo_file_id ? { id: String(r.photo_file_id), name: String(r.photo_name || "photo") } : null,
+      created_at: r.created_at ? new Date(r.created_at).getTime() : null,
+      closed_at: r.closed_at ? new Date(r.closed_at).getTime() : null
+    };
+  });
+  if (me.role === "committee") return all;
+  return all.filter(function (i) { return i.unit === me.unit; });
+}
+
+function raiseIssue(body) {
+  var me = session(body);
+  var unit = me.role === "committee" ? String(body.unit || "").trim() : me.unit;
+  if (!unit) throw new Error("Which flat is this for?");
+  var detail = String(body.detail || "").trim();
+  if (!detail) throw new Error("Describe the problem.");
+
+  var n = 0;
+  rows(SHEET_ISSUES).forEach(function (r) {
+    var m = String(r.id).match(/ISS-(\d+)/);
+    if (m) n = Math.max(n, Number(m[1]));
+  });
+  var id = "ISS-" + String(n + 1).padStart(4, "0");
+
+  var fileId = "", fileName = "";
+  if (body.dataUrl) {
+    var m2 = String(body.dataUrl).match(/^data:([^;]+);base64,(.*)$/);
+    if (!m2) throw new Error("Could not read that photo. Try a JPG or PNG.");
+    fileName = String(body.name || "photo.jpg");
+    var blob = Utilities.newBlob(Utilities.base64Decode(m2[2]), m2[1], unit + "-" + id + "-" + fileName);
+    fileId = issueFolder().createFile(blob).getId();
+  }
+
+  tab(SHEET_ISSUES).appendRow([
+    id, unit, me.name, String(body.category || "Other"), detail,
+    "open", fileId, fileName, "", new Date(), ""
+  ]);
+  audit(me.login, "issue", id, String(body.category || "Other"));
+  return { id: id };
+}
+
+function issueUpdate(body) {
+  var me = session(body);
+  if (me.role !== "committee") throw new Error("Only the committee can update an issue.");
+  var id = String(body.id || ""), status = String(body.status || "");
+  if (["open", "in_progress", "closed"].indexOf(status) < 0) throw new Error("Unknown status.");
+
+  var s = tab(SHEET_ISSUES), hit = null;
+  rows(SHEET_ISSUES).forEach(function (r) { if (String(r.id).trim() === id) hit = r; });
+  if (!hit) throw new Error("That issue is no longer in the list.");
+
+  s.getRange(hit._row, colIndex(SHEET_ISSUES, "status")).setValue(status);
+  if (typeof body.reply === "string") {
+    s.getRange(hit._row, colIndex(SHEET_ISSUES, "reply")).setValue(body.reply);
+  }
+  s.getRange(hit._row, colIndex(SHEET_ISSUES, "closed_at")).setValue(status === "closed" ? new Date() : "");
+  audit(me.login, "issue-" + status, id, "");
+  return { id: id, status: status };
+}
+
+function issuePhoto(body) {
+  var me = session(body);
+  var id = String(body.id || "");
+  var hit = null;
+  rows(SHEET_ISSUES).forEach(function (r) { if (String(r.id).trim() === id) hit = r; });
+  if (!hit || !hit.photo_file_id) throw new Error("No photo on that issue.");
+  if (me.role !== "committee" && String(hit.flat).trim() !== me.unit) throw new Error("That is not your issue.");
+
+  var blob = DriveApp.getFileById(String(hit.photo_file_id)).getBlob();
+  return { dataUrl: "data:" + blob.getContentType() + ";base64," + Utilities.base64Encode(blob.getBytes()) };
+}
+
+function issueFolder() {
+  var it = DriveApp.getFoldersByName(ISSUE_FOLDER);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(ISSUE_FOLDER);
 }
 
 /* ───────────────────────── payment proof ───────────────────────── */
