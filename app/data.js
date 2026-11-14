@@ -92,8 +92,12 @@
   };
 
   Data.signOut = function () {
+    /* Drop everything the last person loaded, so none of it can be read by
+       whoever signs in next on this phone. */
     Data._session = null;
     Data._cache = null;
+    Data.notices = [];
+    Data.issues = [];
     if (Data.mode === "demo") { store(DEMO_SESSION, null); return Promise.resolve(); }
     var p = Data._token ? call("signOut", {}).catch(function () {}) : Promise.resolve();
     Data._token = null; store(TOKEN_KEY, null);

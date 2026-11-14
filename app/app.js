@@ -40,6 +40,7 @@
     confirmed: "Confirmed", rejected: "Rejected", cancelled_nopay: "Auto-cancelled", cancelled: "Cancelled"
   };
 
+  var lastNoticeIds = null;
   var S = { me: null, tab: "", date: iso(new Date()), sel: { fac: null, slots: [] }, bookings: [], busy: false };
 
   function iso(d) { return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
@@ -110,6 +111,14 @@
     document.getElementById("avatar").textContent = initials(S.me.name);
     document.getElementById("sub").textContent = isResident() ? "Your bookings" : "Clubhouse desk";
     S.tab = isResident() ? "book" : "pending";
+    S.bookings = [];
+    lastNoticeIds = null;
+    /* Draw this person's tabs at once and clear the work area. The sheet takes a
+       couple of seconds to answer, and without this the previous user's screen
+       stays on display until it does. */
+    renderTabs();
+    viewEl.innerHTML = '<div class="empty"><strong>Loading…</strong>' +
+      (isResident() ? "Fetching your bookings." : "Fetching the register.") + "</div>";
     refresh();
   }
   function initials(n) {
@@ -117,7 +126,13 @@
   }
 
   document.getElementById("signout").onclick = function () {
-    Data.signOut().then(function () { S.me = null; S.bookings = []; showLogin(); });
+    /* Wipe the screen before the network call, so nothing of this person's is
+       left behind for whoever signs in next on the same phone. */
+    S.me = null; S.bookings = []; S.sel = { fac: null, slots: [] };
+    lastNoticeIds = null;
+    tabsEl.innerHTML = ""; viewEl.innerHTML = "";
+    showLogin();
+    Data.signOut();
   };
 
   /* ───────────── data refresh ───────────── */
@@ -592,7 +607,6 @@
 
   /* A new notice while the app is open gets a toast, and a system notification
      if the resident has allowed them on this phone. */
-  var lastNoticeIds = null;
   function announceNewNotices() {
     var ids = (Data.notices || []).map(function (n) { return n.id; });
     if (lastNoticeIds === null) { lastNoticeIds = ids; return; }
