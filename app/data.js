@@ -15,6 +15,8 @@
     mode: API ? "sheets" : "demo",
     ready: false,
     spaces: null,
+    notices: [],
+    issues: [],
     _session: null,
     _token: null
   };
@@ -105,6 +107,8 @@
     return call("list", {}).then(function (d) {
       Data._session = d.me;
       Data.spaces = d.spaces;
+      Data.notices = d.notices || [];
+      Data.issues = d.issues || [];
       return d.bookings;
     });
   };
@@ -169,6 +173,45 @@
     if (proofCache[booking.id]) return Promise.resolve(proofCache[booking.id]);
     return call("proofImage", { id: booking.id }).then(function (d) {
       proofCache[booking.id] = d.dataUrl;
+      return d.dataUrl;
+    }).catch(function () { return null; });
+  };
+
+  /* ───────────── notice board ───────────── */
+  Data.addNotice = function (title, body, pinned) {
+    if (Data.mode === "demo") return Promise.reject(new Error("Not connected to the booking sheet."));
+    return call("addNotice", { title: title, body: body, pinned: !!pinned });
+  };
+  Data.editNotice = function (id, patch) {
+    if (Data.mode === "demo") return Promise.reject(new Error("Not connected to the booking sheet."));
+    return call("editNotice", Object.assign({ id: id }, patch));
+  };
+
+  /* ───────────── issues ───────────── */
+  Data.raiseIssue = function (category, detail, file) {
+    if (Data.mode === "demo") return Promise.reject(new Error("Not connected to the booking sheet."));
+    var send = function (dataUrl) {
+      return call("raiseIssue", {
+        category: category, detail: detail,
+        dataUrl: dataUrl || "", name: file ? file.name : ""
+      });
+    };
+    if (!file) return send(null);
+    return shrinkImage(file, 1400).then(function (dataUrl) {
+      if (!dataUrl) throw new Error("Could not read that photo. Try a JPG or PNG.");
+      return send(dataUrl);
+    });
+  };
+  Data.issueUpdate = function (id, status, reply) {
+    return call("issueUpdate", { id: id, status: status, reply: reply });
+  };
+
+  var issuePhotoCache = {};
+  Data.issuePhoto = function (issue) {
+    if (!issue || !issue.photo) return Promise.resolve(null);
+    if (issuePhotoCache[issue.id]) return Promise.resolve(issuePhotoCache[issue.id]);
+    return call("issuePhoto", { id: issue.id }).then(function (d) {
+      issuePhotoCache[issue.id] = d.dataUrl;
       return d.dataUrl;
     }).catch(function () { return null; });
   };

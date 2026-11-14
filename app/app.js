@@ -125,6 +125,7 @@
     return Data.list().then(function (list) {
       S.bookings = list;
       useSpaces(Data.spaces);
+      announceNewNotices();
       return sweepExpired();
     }).then(render).catch(function (e) {
       viewEl.innerHTML = '<div class="empty"><strong>Could not load bookings</strong>' + esc(e.message) + '</div>';
@@ -148,7 +149,13 @@
   function tabDefs() {
     if (isResident()) {
       var due = S.bookings.filter(function (b) { return mine(b) && b.status === "approved"; }).length;
-      return [{ id: "book", label: "Book a space" }, { id: "mine", label: "My bookings", cnt: due }, { id: "rules", label: "Rules" }];
+      return [
+        { id: "book", label: "Book a space" },
+        { id: "mine", label: "My bookings", cnt: due },
+        { id: "notices", label: "Notices", cnt: unseenNotices().length },
+        { id: "issues", label: "Report an issue" },
+        { id: "rules", label: "Rules" }
+      ];
     }
     var req = S.bookings.filter(function (b) { return b.status === "requested"; }).length;
     var ver = S.bookings.filter(function (b) { return b.status === "paid_pending"; }).length;
@@ -156,6 +163,8 @@
       { id: "pending", label: "Pending work", cnt: req + ver },
       { id: "approvals", label: "Approvals", cnt: req },
       { id: "payments", label: "Payments", cnt: ver },
+      { id: "issues", label: "Issues", cnt: openIssues().length },
+      { id: "notices", label: "Notice board" },
       { id: "register", label: "Register" },
       { id: "day", label: "Day view" }
     ];
@@ -470,6 +479,239 @@
     document.getElementById("today").onclick = function () { S.date = iso(new Date()); render(); };
   }
 
+  /* ───────────── notice board ─────────────
+     Residents read; the committee posts. "Seen" is per device, so a notice is
+     new to each person until they open the board on that phone. */
+  var SEEN_KEY = "triton.seenNotices";
+  function seenIds() {
+    try { return JSON.parse(localStorage.getItem(SEEN_KEY) || "[]"); } catch (e) { return []; }
+  }
+  function markSeen() {
+    try {
+      localStorage.setItem(SEEN_KEY, JSON.stringify((Data.notices || []).map(function (n) { return n.id; })));
+    } catch (e) {}
+  }
+  function unseenNotices() {
+    var seen = seenIds();
+    return (Data.notices || []).filter(function (n) { return seen.indexOf(n.id) < 0; });
+  }
+
+  function renderNotices() {
+    var list = Data.notices || [];
+    var fresh = unseenNotices();
+    var h = "";
+
+    if (!isResident()) {
+      h += '<div class="card" style="margin-bottom:16px"><h3 style="font-size:15px;margin-bottom:10px">Add to notice board</h3>' +
+        '<div class="formrow"><div class="f" style="grid-column:1/-1"><label for="nt-title">Heading</label>' +
+        '<input type="text" id="nt-title" placeholder="Water supply interrupted on Tuesday"></div></div>' +
+        '<div class="formrow"><div class="f" style="grid-column:1/-1"><label for="nt-body">Notice</label>' +
+        '<textarea id="nt-body" rows="4" placeholder="Tank cleaning between 10am and 2pm. Please store what you need."></textarea></div></div>' +
+        '<div class="actions"><button class="btn primary" id="nt-go" type="button">Post notice</button>' +
+        '<label class="hint" style="display:flex;align-items:center;gap:6px;flex:0 0 auto">' +
+        '<input type="checkbox" id="nt-pin" style="width:auto"> Keep at the top</label>' +
+        '<span class="hint">Every resident sees this the next time they open the app.</span></div></div>';
+    } else if (window.Notification && Notification.permission === "default") {
+      h += '<div class="card" style="margin-bottom:16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">' +
+        '<div style="flex:1 1 220px;min-width:0"><strong style="font-family:var(--display)">Get told about new notices</strong>' +
+        '<div class="hint">The phone will show a notice from the committee even when the app is in the background.</div></div>' +
+        '<button class="btn primary" id="nt-allow" type="button">Turn on</button></div>';
+      if (fresh.length) {
+        h += '<div class="note" style="margin-bottom:16px">' + fresh.length +
+          (fresh.length === 1 ? " notice you have not read yet." : " notices you have not read yet.") + "</div>";
+      }
+    } else if (fresh.length) {
+      h += '<div class="note" style="margin-bottom:16px">' + fresh.length +
+        (fresh.length === 1 ? " notice you have not read yet." : " notices you have not read yet.") + "</div>";
+    }
+
+    if (!list.length) {
+      h += '<div class="empty"><strong>Nothing on the board</strong>' +
+        (isResident() ? "Notices from the committee appear here."
+                      : "Post the first notice above and every resident will see it.") + "</div>";
+    } else {
+      h += '<div class="rows">' + list.map(function (n) {
+        var isNew = fresh.indexOf(n) > -1;
+        var x = '<div class="row" data-s="' + (n.pinned ? "confirmed" : "requested") + '" data-notice="' + esc(n.id) + '">' +
+          '<div class="rmain"><div class="rid">' + (n.posted_at ? stamp(n.posted_at) : "") +
+          " &middot; " + esc(n.posted_by) + "</div>" +
+          '<div class="rtitle">' + esc(n.title) + "</div>" +
+          '<div class="rsub" style="white-space:pre-wrap">' + esc(n.body) + "</div></div>" +
+          '<div class="rside">';
+        if (n.pinned) x += '<span class="badge" data-s="confirmed">Pinned</span>';
+        if (isNew && isResident()) x += '<span class="badge" data-s="requested">New</span>';
+        if (!isResident()) {
+          x += '<div class="actions"><button class="btn sm" data-ntc="pin">' +
+            (n.pinned ? "Unpin" : "Pin") + '</button>' +
+            '<button class="btn sm danger" data-ntc="remove">Remove</button></div>';
+        }
+        return x + "</div></div>";
+      }).join("") + "</div>";
+    }
+
+    viewEl.innerHTML = h;
+
+    if (isResident()) markSeen();
+
+    var allow = document.getElementById("nt-allow");
+    if (allow) {
+      allow.onclick = function () {
+        /* Must be asked from a tap; browsers ignore an unprompted request. */
+        Notification.requestPermission().then(function (p) {
+          toast(p === "granted" ? "Notifications on for this phone."
+                                : "Notices will still show inside the app.");
+          render();
+        });
+      };
+    }
+
+    var go = document.getElementById("nt-go");
+    if (go) {
+      go.onclick = function () {
+        var title = (document.getElementById("nt-title").value || "").trim();
+        var text = (document.getElementById("nt-body").value || "").trim();
+        if (!title || !text) { toast("Give the notice a heading and some text."); return; }
+        go.disabled = true; go.textContent = "Posting…";
+        Data.addNotice(title, text, document.getElementById("nt-pin").checked)
+          .then(function () { toast("Notice posted."); return refresh(); })
+          .catch(function (e) { toast(e.message); go.disabled = false; go.textContent = "Post notice"; });
+      };
+    }
+    Array.prototype.forEach.call(viewEl.querySelectorAll("[data-ntc]"), function (el) {
+      var id = el.closest("[data-notice]").dataset.notice;
+      var n = (Data.notices || []).filter(function (x) { return x.id === id; })[0];
+      el.onclick = function () {
+        el.disabled = true;
+        var patch = el.dataset.ntc === "remove" ? { remove: true } : { pinned: !n.pinned };
+        Data.editNotice(id, patch)
+          .then(function () { return refresh(); })
+          .catch(function (e) { toast(e.message); el.disabled = false; });
+      };
+    });
+  }
+
+  /* A new notice while the app is open gets a toast, and a system notification
+     if the resident has allowed them on this phone. */
+  var lastNoticeIds = null;
+  function announceNewNotices() {
+    var ids = (Data.notices || []).map(function (n) { return n.id; });
+    if (lastNoticeIds === null) { lastNoticeIds = ids; return; }
+    var added = (Data.notices || []).filter(function (n) { return lastNoticeIds.indexOf(n.id) < 0; });
+    lastNoticeIds = ids;
+    if (!added.length || !isResident()) return;
+    var n = added[0];
+    toast("New notice: " + n.title);
+    try {
+      if (window.Notification && Notification.permission === "granted") {
+        new Notification("Triton — " + n.title, { body: n.body.slice(0, 120), icon: "icons/icon-192.png" });
+      }
+    } catch (e) {}
+  }
+
+  /* ───────────── issues ─────────────
+     A resident reports a problem for their own flat; the committee works through
+     all of them. */
+  var CATEGORIES = ["Plumbing", "Electrical", "Lift", "Housekeeping", "Security", "Parking", "Common area", "Other"];
+  var ISTATUS = { open: "Open", in_progress: "In progress", closed: "Closed" };
+
+  function openIssues() {
+    return (Data.issues || []).filter(function (i) { return i.status !== "closed"; });
+  }
+
+  function renderIssues() {
+    var list = (Data.issues || []).slice().sort(function (a, b) {
+      var rank = { open: 0, in_progress: 1, closed: 2 };
+      return (rank[a.status] - rank[b.status]) || ((b.created_at || 0) - (a.created_at || 0));
+    });
+    var h = "";
+
+    if (isResident()) {
+      h += '<div class="card" style="margin-bottom:16px"><h3 style="font-size:15px;margin-bottom:10px">Report an issue</h3>' +
+        '<div class="formrow"><div class="f"><label for="is-cat">What is it about</label><select id="is-cat">' +
+        CATEGORIES.map(function (c) { return '<option value="' + c + '">' + c + "</option>"; }).join("") +
+        '</select></div></div>' +
+        '<div class="formrow"><div class="f" style="grid-column:1/-1"><label for="is-detail">What is wrong</label>' +
+        '<textarea id="is-detail" rows="3" placeholder="Water leaking from the ceiling of the basement parking, near pillar B4."></textarea></div></div>' +
+        '<div class="proof" style="margin-top:0"><label class="btn sm" for="is-photo">Add a photo</label>' +
+        '<input type="file" id="is-photo" accept="image/*" hidden>' +
+        '<span class="pn" id="is-photoname">A photo helps the desk find it. Optional.</span></div>' +
+        '<div class="actions" style="margin-top:10px"><button class="btn primary" id="is-go" type="button">Send to the committee</button></div></div>';
+    }
+
+    if (!list.length) {
+      h += '<div class="empty"><strong>' + (isResident() ? "You have not reported anything" : "No issues reported") + "</strong>" +
+        (isResident() ? "Anything you report stays visible here until the desk closes it."
+                      : "Issues raised by residents land here.") + "</div>";
+    } else {
+      h += '<div class="rows">' + list.map(function (i) {
+        var tone = i.status === "closed" ? "confirmed" : (i.status === "in_progress" ? "approved" : "requested");
+        var x = '<div class="row" data-s="' + tone + '" data-issue="' + esc(i.id) + '"><div class="rmain">' +
+          '<div class="rid">' + esc(i.id) + (i.created_at ? " &middot; " + stamp(i.created_at) : "") + "</div>" +
+          '<div class="rtitle">' + esc(i.category) + (isResident() ? "" : " &middot; " + esc(i.unit)) + "</div>" +
+          '<div class="rsub" style="white-space:pre-wrap">' + esc(i.detail) + "</div>";
+        if (!isResident()) x += '<div class="rsub">' + esc(i.resident) + "</div>";
+        if (i.reply) x += '<div class="rsub"><strong>Committee:</strong> ' + esc(i.reply) + "</div>";
+        if (i.photo) {
+          x += '<div class="proof" data-photo="' + esc(i.id) + '"><div class="pn">Photo: ' + esc(i.photo.name) + "</div></div>";
+        }
+        if (!isResident()) {
+          x += '<div class="formrow" style="margin-top:9px"><div class="f" style="grid-column:1/-1">' +
+            '<label for="rep-' + esc(i.id) + '">Reply to the resident</label>' +
+            '<input type="text" id="rep-' + esc(i.id) + '" value="' + esc(i.reply) + '" placeholder="Plumber booked for Thursday morning."></div></div>';
+        }
+        x += '</div><div class="rside"><span class="badge" data-s="' + tone + '">' + ISTATUS[i.status] + "</span>";
+        if (!isResident()) {
+          x += '<div class="actions">';
+          if (i.status !== "in_progress") x += '<button class="btn sm" data-iss="in_progress">Start</button>';
+          if (i.status !== "closed") x += '<button class="btn sm primary" data-iss="closed">Close</button>';
+          if (i.status === "closed") x += '<button class="btn sm" data-iss="open">Reopen</button>';
+          x += "</div>";
+        }
+        return x + "</div></div>";
+      }).join("") + "</div>";
+    }
+
+    viewEl.innerHTML = h;
+
+    var photo = document.getElementById("is-photo");
+    if (photo) {
+      photo.onchange = function () {
+        document.getElementById("is-photoname").textContent =
+          photo.files[0] ? photo.files[0].name : "A photo helps the desk find it. Optional.";
+      };
+      var go = document.getElementById("is-go");
+      go.onclick = function () {
+        var detail = (document.getElementById("is-detail").value || "").trim();
+        if (!detail) { toast("Say what is wrong."); return; }
+        go.disabled = true; go.textContent = "Sending…";
+        Data.raiseIssue(document.getElementById("is-cat").value, detail, photo.files[0])
+          .then(function (r) { toast((r && r.id ? r.id : "Issue") + " sent to the committee."); return refresh(); })
+          .catch(function (e) { toast(e.message); go.disabled = false; go.textContent = "Send to the committee"; });
+      };
+    }
+
+    Array.prototype.forEach.call(viewEl.querySelectorAll("[data-iss]"), function (el) {
+      var id = el.closest("[data-issue]").dataset.issue;
+      el.onclick = function () {
+        var replyEl = document.getElementById("rep-" + id);
+        el.disabled = true;
+        Data.issueUpdate(id, el.dataset.iss, replyEl ? replyEl.value : undefined)
+          .then(function () { toast("Issue " + ISTATUS[el.dataset.iss].toLowerCase() + "."); return refresh(); })
+          .catch(function (e) { toast(e.message); el.disabled = false; });
+      };
+    });
+
+    Array.prototype.forEach.call(viewEl.querySelectorAll("[data-photo]"), function (box) {
+      var i = (Data.issues || []).filter(function (x) { return x.id === box.dataset.photo; })[0];
+      Data.issuePhoto(i).then(function (url) {
+        if (!url || box.querySelector("img")) return;
+        var img = new Image();
+        img.src = url; img.alt = "Photo for " + i.id;
+        box.insertBefore(img, box.firstChild);
+      });
+    });
+  }
+
   /* ───────────── resident: rules ───────────── */
   function step(n, t, d) { return '<div class="step"><div class="sn">' + n + '</div><div class="st">' + t + '</div><div class="sd">' + d + "</div></div>"; }
   function renderRules() {
@@ -524,6 +766,8 @@
     else if (t === "register") renderList(committeePipe(), function () { return true; },
       "The register is empty", "Every booking, in every state, is listed here.");
     else if (t === "day") renderDay();
+    else if (t === "notices") renderNotices();
+    else if (t === "issues") renderIssues();
     else if (t === "rules") renderRules();
   }
 
